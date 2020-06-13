@@ -596,6 +596,10 @@ byte getPixelValue2BPP(int x, int y)
 */
 void addError(int x, int isNextRow, float value)
 {
+    if(x < 0 || x >= IMAGE_WIDTH)
+    {
+        return;
+    }
     int row = isNextRow ^ currentErrorBufferLine;
     start = row * IMG_WIDTH;
     errorBuffer[start + x] += value;
