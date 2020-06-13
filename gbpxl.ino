@@ -551,6 +551,11 @@ void gsXlPrintBeginGsv0()
     epson_write(0);                   // yH
 }
 
+
+#define ERROR_BUFFER_SIZE (IMG_WIDTH * 2)
+float errorBuffer[ERROR_BUFFER_SIZE]; // keep error for current row + next row
+int currentErrorBufferLine = 0;
+
 /**
  * Clears the print buffer
  */
@@ -561,6 +566,71 @@ void clearBuffer()
     {
         printBuffer[i] = 0;
     }
+
+    currentErrorBufferLine = 0;
+    for (int i = 0; i < ERROR_BUFFER_SIZE; i++)
+    {
+        errorBuffer[i] = 0;
+    }
+}
+
+
+/*
+ * Retrieve pixel value from current packet data. Does not apply error
+*/
+byte getPixelValue2BPP(int x, int y)
+{
+    // calculating the values from the previous version of the loop, rest is like before
+    int line = y / 8;
+    int tile = x / 8;
+    int j = y % 8;
+    int i = x % 8;
+    short offset = tile * 8 + j + 8 * TILES_PER_LINE * line;
+    byte hiBit = (byte)((gbp_printer.gbp_packet.data_ptr[offset * 2 + 1] >> (7 - i)) & 1);
+    byte loBit = (byte)((gbp_printer.gbp_packet.data_ptr[offset * 2] >> (7 - i)) & 1);
+    return (byte)((hiBit << 1) | loBit); // 0-3        
+}
+
+/*
+ * Add error to buffer in next location
+*/
+void addError(int x, int isNextRow, float value)
+{
+    int row = isNextRow ^ currentErrorBufferLine;
+    start = row * IMG_WIDTH;
+    errorBuffer[start + x] += value;
+}
+
+/*
+ * Retrieve error, you only need the current row for that
+*/
+float getErrorInCurrentRow(int x)
+{
+    int row = currentErrorBufferLine;
+    start = row * IMG_WIDTH;
+    return errorBuffer[start + x];
+}
+
+/*
+ * Switch error buffer line after line has finished processing, clear processed line
+*/
+void switchErrorBuffer()
+{
+    // clear current error buffer line
+    int start = currentErrorBufferLine * IMG_WIDTH;
+    for(int i = 0; i < IMG_WIDTH; i++)
+    {
+        errorBuffer[start + i] = 0.f;
+    }
+    currentErrorBufferLine ^= 1;
+}
+
+/*
+ * Adapt this to change how the palette value is chosen
+*/
+byte getClosest2BPPVal(float pixelPlusError)
+{
+    return byte(round(pixelPlusError)); // just remove round if not part of the arduino, wasn't sure about that
 }
 
 /** 
@@ -571,28 +641,31 @@ void recieveData()
 {
     Serial.println("Recieving data...");
     byte lines = gbp_printer.gbp_packet.data_length / 16 / 20; //2
-    for (int line = 0; line < lines; line++)
+    
+    for (int y = 0; y < lines * 8; j++) // we use real pixels and not 8x8 tiles here like before
     {
-        for (byte tile = 0; tile < TILES_PER_LINE; tile++)
+        for (int x = 0; x < IMG_WIDTH; i++)
         {
-            for (byte j = 0; j < TILE_PIXEL_HEIGHT; j++)
+            byte originalPixel = getPixelValue2BPP(x, y);
+            float processedPixel = originalPixel + getErrorInCurrentRow(x);
+            byte outputPixel = getClosest2BPPVal(processedPixel);
+            float quantError = processedPixel - outputPixel;
+
+            addError(x + 1, 0, quantError * 7.0 / 16.0)
+            addError(x - 1, 1, quantError * 3.0 / 16.0)
+            addError(x + 0, 1, quantError * 5.0 / 16.0)
+            addError(x + 1, 1, quantError * 1.0 / 16.0)
+
+            //  index = totalBytes + (line * TILES_PER_LINE * 8) + tile
+            int index = totalBytes + (y * TILES_PER_LINE)        + (x / 8);
+            if (outputPixel > 1)
             {
-                for (byte i = 0; i < TILE_PIXEL_WIDTH; i++)
-                {
-                    short offset = tile * 8 + j + 8 * TILES_PER_LINE * line;
-                    byte hiBit = (byte)((gbp_printer.gbp_packet.data_ptr[offset * 2 + 1] >> (7 - i)) & 1);
-                    byte loBit = (byte)((gbp_printer.gbp_packet.data_ptr[offset * 2] >> (7 - i)) & 1);
-                    byte val = (byte)((hiBit << 1) | loBit); // 0-3
-                    int index = (tile + TILES_PER_LINE * j) + totalBytes;
-                    if (val > 1)
-                    {
-                        printBuffer[index] = printBuffer[index] | (1 << (7 - i));
-                    }
-                }
+                printBuffer[index] = printBuffer[index] | (1 << (7 - i));
             }
         }
-        totalBytes += TILES_PER_LINE * 8;
+        switchErrorBuffer();
     }
+    totalBytes += lines * TILES_PER_LINE * 8;
 }
 
 /**
