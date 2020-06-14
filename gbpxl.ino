@@ -630,11 +630,11 @@ void switchErrorBuffer()
 }
 
 /*
- * Adapt this to change how the palette value is chosen
+ * Adapt this to change how the printer 1BPP value is chosen from the gameboy's 2BPP value (+ the error), uses 0 and 3 as output to simplify calculating error
 */
-byte getClosest2BPPVal(float pixelPlusError)
+byte getClosestMonochromePaletteValFrom2BPP(float pixelPlusError)
 {
-    return byte(round(pixelPlusError)); // just remove round if not part of the arduino, wasn't sure about that
+    return (pixelPlusError >= 1.5) ? 3 : 0; // perfect middle split, higher than middle goes full black, lower goes white
 }
 
 /** 
@@ -652,7 +652,7 @@ void recieveData()
         {
             byte originalPixel = getPixelValue2BPP(x, y);
             float processedPixel = originalPixel + getErrorInCurrentRow(x);
-            byte outputPixel = getClosest2BPPVal(processedPixel);
+            byte outputPixel = getClosestMonochromePaletteValFrom2BPP(processedPixel);
             float quantError = processedPixel - outputPixel;
 
             addError(x + 1, 0, quantError * 7.0 / 16.0)
